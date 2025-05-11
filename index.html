@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>ulawify – WAV to Teensy .h/.cpp converter</title>
+  <style>
+    body {
+      font-family: sans-serif;
+      max-width: 600px;
+      margin: 40px auto;
+      padding: 20px;
+      text-align: center;
+    }
+    input[type="file"] {
+      margin: 20px 0;
+    }
+    button {
+      padding: 10px 20px;
+      font-size: 1em;
+    }
+  </style>
+</head>
+<body>
+  <h1>ulawify</h1>
+  <p>Convert a WAV file to Teensy-friendly µ-law encoded <code>.h</code> and <code>.cpp</code> files</p>
+  <input type="file" accept=".wav" id="fileInput"><br>
+  <button onclick="processFile()">Convert & Download</button>
+  <p id="status"></p>
+
+  <script>
+    // µ-law encoding (8-bit)
+    function linearToUlaw(sample) {
+      const BIAS = 0x84;
+      const CLIP = 32635;
+
+      let sign = (sample >> 8) & 0x80;
+      if (sign) sample = -sample;
+      if (sample > CLIP) sample = CLIP;
+      sample += BIAS;
+
+      let exponent = 7;
+      for (let expMask = 0x4000; (sample & expMask) === 0 && exponent > 0; expMask >>= 1) {
+        exponent--;
+      }
+
+      let mantissa = (sample >> ((exponent === 0) ? 4 : (exponent + 3))) & 0x0F;
+      let ulaw = ~(sign | (exponent << 4) | mantissa);
+      return ulaw & 0xFF;
+    }
+
+    async function processFile() {
+      const fileInput = document.getElementById('fileInput');
+      const status = document.getElementById('status');
+      if (!fileInput.files.length) return;
+
+      const file = fileInput.files[0];
+      const arrayBuffer = await file.arrayBuffer();
+      const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const decoded = await audioCtx.decodeAudioData(arrayBuffer);
+
+      status.textContent = 'Processing...';
+
+      // Resample to 44.1kHz using OfflineAudioContext if needed
+      let audioBuffer = decoded;
+      if (decoded.sampleRate !== 44100) {
+        const length = Math.floor(decoded.duration * 44100);
+        const offlineCtx = new OfflineAudioContext(1, length, 44100);
+        const source = offlineCtx.createBufferSource();
+        source.buffer = decoded;
+        source.connect(offlineCtx.destination);
+        source.start();
+        audioBuffer = await offlineCtx.startRendering();
+      }
+
+      // Downmix to mono
+      const length = audioBuffer.length;
+      const mono = new Float32Array(length);
+      if (audioBuffer.numberOfChannels === 1) {
+        mono.set(audioBuffer.getChannelData(0));
+      } else {
+        const left = audioBuffer.getChannelData(0);
+        const right = audioBuffer.getChannelData(1);
+        for (let i = 0; i < length; i++) {
+          mono[i] = (left[i] + right[i]) * 0.5;
+        }
+      }
+
+      // Convert float [-1,1] to 16-bit PCM, then to µ-law
+      const ulawData = new Uint8Array(length);
+      for (let i = 0; i < length; i++) {
+        let s = Math.max(-1, Math.min(1, mono[i]));
+        let pcm16 = Math.floor(s * 32767);
+        ulawData[i] = linearToUlaw(pcm16);
+      }
+
+      // Generate array name from filename
+      const baseName = file.name.replace(/\.[^/.]+$/, '').replace(/[^a-zA-Z0-9]/g, '');
+      const arrayName = 'AudioSample' + baseName.charAt(0).toUpperCase() + baseName.slice(1);
+
+      // Generate .h and .cpp
+      const header = `#pragma once\nextern const unsigned int ${arrayName}_len;\nextern const uint8_t ${arrayName}[];\n`;
+      let cpp = `#include "${arrayName}.h"\nconst unsigned int ${arrayName}_len = ${length};\nconst uint8_t ${arrayName}[] = {\n`;
+
+      for (let i = 0; i < ulawData.length; i++) {
+        if (i % 16 === 0) cpp += '  ';
+        cpp += '0x' + ulawData[i].toString(16).padStart(2, '0') + ', ';
+        if ((i + 1) % 16 === 0) cpp += '\n';
+      }
+      cpp += '};\n';
+
+      // Package into downloadable files
+      const zip = new JSZip();
+      zip.file(`${arrayName}.h`, header);
+      zip.file(`${arrayName}.cpp`, cpp);
+      const blob = await zip.generateAsync({ type: 'blob' });
+
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `${arrayName}_ulaw.zip`;
+      a.click();
+
+      status.textContent = 'Done! Files downloaded.';
+    }
+
+    // Include JSZip via CDN
+    const script = document.createElement('script');
+    script.src = 'https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js';
+    document.head.appendChild(script);
+  </script>
+</body>
+</html>
