@@ -1,8 +1,8 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <title>ulawify – WAV to Teensy .h/.cpp converter</title>
+  <meta charset="UTF-8" />
+  <title>ulawify – WAV to Teensy .h/.cpp</title>
   <style>
     body {
       font-family: sans-serif;
@@ -22,13 +22,12 @@
 </head>
 <body>
   <h1>ulawify</h1>
-  <p>Convert a WAV file to Teensy-friendly µ-law encoded <code>.h</code> and <code>.cpp</code> files</p>
+  <p>Convert a WAV file to Teensy-friendly µ-law <code>.h</code> and <code>.cpp</code> files</p>
   <input type="file" accept=".wav" id="fileInput"><br>
   <button onclick="processFile()">Convert & Download</button>
   <p id="status"></p>
 
   <script>
-    // µ-law encoding (8-bit)
     function linearToUlaw(sample) {
       const BIAS = 0x84;
       const CLIP = 32635;
@@ -39,13 +38,11 @@
       sample += BIAS;
 
       let exponent = 7;
-      for (let expMask = 0x4000; (sample & expMask) === 0 && exponent > 0; expMask >>= 1) {
+      for (let expMask = 0x4000; (sample & expMask) === 0 && exponent > 0; expMask >>= 1)
         exponent--;
-      }
 
-      let mantissa = (sample >> ((exponent === 0) ? 4 : (exponent + 3))) & 0x0F;
-      let ulaw = ~(sign | (exponent << 4) | mantissa);
-      return ulaw & 0xFF;
+      let mantissa = (sample >> (exponent + 3)) & 0x0F;
+      return ~(sign | (exponent << 4) | mantissa) & 0xFF;
     }
 
     async function processFile() {
@@ -60,7 +57,7 @@
 
       status.textContent = 'Processing...';
 
-      // Resample to 44.1kHz using OfflineAudioContext if needed
+      // Resample if needed
       let audioBuffer = decoded;
       if (decoded.sampleRate !== 44100) {
         const length = Math.floor(decoded.duration * 44100);
@@ -72,43 +69,57 @@
         audioBuffer = await offlineCtx.startRendering();
       }
 
-      // Downmix to mono
-      const length = audioBuffer.length;
-      const mono = new Float32Array(length);
+      // Mono downmix
+      const len = audioBuffer.length;
+      const mono = new Float32Array(len);
       if (audioBuffer.numberOfChannels === 1) {
         mono.set(audioBuffer.getChannelData(0));
       } else {
-        const left = audioBuffer.getChannelData(0);
-        const right = audioBuffer.getChannelData(1);
-        for (let i = 0; i < length; i++) {
-          mono[i] = (left[i] + right[i]) * 0.5;
+        const L = audioBuffer.getChannelData(0);
+        const R = audioBuffer.getChannelData(1);
+        for (let i = 0; i < len; i++) mono[i] = (L[i] + R[i]) * 0.5;
+      }
+
+      // µ-law encode
+      const ulawBytes = new Uint8Array(len);
+      for (let i = 0; i < len; i++) {
+        const s = Math.max(-1, Math.min(1, mono[i]));
+        const pcm16 = Math.floor(s * 32767);
+        ulawBytes[i] = linearToUlaw(pcm16);
+      }
+
+      // Pack into unsigned int (4 bytes each)
+      const packed = [];
+      for (let i = 0; i < ulawBytes.length; i += 4) {
+        let val = 0;
+        for (let j = 0; j < 4; j++) {
+          val |= (ulawBytes[i + j] || 0) << (8 * (3 - j));
         }
+        packed.push(val >>> 0); // force unsigned
       }
 
-      // Convert float [-1,1] to 16-bit PCM, then to µ-law
-      const ulawData = new Uint8Array(length);
-      for (let i = 0; i < length; i++) {
-        let s = Math.max(-1, Math.min(1, mono[i]));
-        let pcm16 = Math.floor(s * 32767);
-        ulawData[i] = linearToUlaw(pcm16);
-      }
-
-      // Generate array name from filename
+      // Name sanitization
       const baseName = file.name.replace(/\.[^/.]+$/, '').replace(/[^a-zA-Z0-9]/g, '');
       const arrayName = 'AudioSample' + baseName.charAt(0).toUpperCase() + baseName.slice(1);
 
-      // Generate .h and .cpp
-      const header = `#pragma once\nextern const unsigned int ${arrayName}_len;\nextern const uint8_t ${arrayName}[];\n`;
-      let cpp = `#include "${arrayName}.h"\nconst unsigned int ${arrayName}_len = ${length};\nconst uint8_t ${arrayName}[] = {\n`;
+      // Generate header
+      const header = `// Audio data converted from WAV file by ulawify\n` +
+        `extern const unsigned int ${arrayName}[${packed.length}];\n`;
 
-      for (let i = 0; i < ulawData.length; i++) {
-        if (i % 16 === 0) cpp += '  ';
-        cpp += '0x' + ulawData[i].toString(16).padStart(2, '0') + ', ';
-        if ((i + 1) % 16 === 0) cpp += '\n';
+      // Generate cpp
+      let cpp = `// Audio data converted from WAV file by ulawify\n`;
+      cpp += `#include "${arrayName}.h"\n#include <Arduino.h>\n`;
+      cpp += `// Converted from ${file.name}, using 44100 Hz, u-law encoding\nPROGMEM\n`;
+      cpp += `const unsigned int ${arrayName}[${packed.length}] = {\n`;
+
+      for (let i = 0; i < packed.length; i++) {
+        if (i % 8 === 0) cpp += '  ';
+        cpp += `0x${packed[i].toString(16).padStart(8, '0')}, `;
+        if ((i + 1) % 8 === 0) cpp += '\n';
       }
       cpp += '};\n';
 
-      // Package into downloadable files
+      // Zip up files
       const zip = new JSZip();
       zip.file(`${arrayName}.h`, header);
       zip.file(`${arrayName}.cpp`, cpp);
@@ -119,10 +130,9 @@
       a.download = `${arrayName}_ulaw.zip`;
       a.click();
 
-      status.textContent = 'Done! Files downloaded.';
+      status.textContent = 'Done!';
     }
 
-    // Include JSZip via CDN
     const script = document.createElement('script');
     script.src = 'https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js';
     document.head.appendChild(script);
