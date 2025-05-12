@@ -167,7 +167,6 @@
         ctx.fillStyle = '#888';
         const gain = parseFloat(gainSlider.value);
         const clip = clipType.value;
-        drawWaveform();
         const step = Math.floor(monoData.length / width);
         for (let x = 0; x < width; x++) {
           const i = x * step;
