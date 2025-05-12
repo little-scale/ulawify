@@ -85,6 +85,14 @@
       const clipType = block.querySelector('.clipType');
       const canvas = block.querySelector('.waveform');
       const ctx = canvas.getContext('2d');
+      const fadeInput = document.createElement('input');
+      fadeInput.type = 'number';
+      fadeInput.min = '0';
+      fadeInput.max = '10000';
+      fadeInput.step = '10';
+      fadeInput.placeholder = 'Fade out (ms)';
+      fadeInput.className = 'fadeInput';
+      canvas.parentNode.insertBefore(fadeInput, canvas.nextSibling);
       const info = block.querySelector('.info');
       const outputName = block.querySelector('.outputName');
       const previewBtn = block.querySelector('.preview');
@@ -152,12 +160,14 @@
       }
 
       function drawWaveform() {
+        const fadeLength = parseFloat(fadeInput?.value || 0);
         const width = canvas.width;
         const height = canvas.height;
         ctx.clearRect(0, 0, width, height);
         ctx.fillStyle = '#888';
         const gain = parseFloat(gainSlider.value);
         const clip = clipType.value;
+        drawWaveform();
         const step = Math.floor(monoData.length / width);
         for (let x = 0; x < width; x++) {
           const i = x * step;
@@ -165,6 +175,19 @@
           const v = clip === 'hard' ? Math.max(-1, Math.min(1, raw)) : Math.tanh(raw);
           const y = (1 - v) * height / 2;
           ctx.fillRect(x, y, 1, 1);
+
+          // Draw fade overlay if active
+          if (fadeLength > 0) {
+            const totalSamples = endSample - startSample;
+            const fadeSamples = Math.floor((fadeLength / 1000) * 44100);
+            const fadeStartX = width * (1 - (fadeSamples / totalSamples));
+            if (x >= fadeStartX && x <= width) {
+              const alpha = (x - fadeStartX) / (width - fadeStartX);
+              ctx.fillStyle = `rgba(0,0,255,${0.2 + alpha * 0.2})`;
+              ctx.fillRect(x, 0, 1, height);
+              ctx.fillStyle = '#888';
+            }
+          }
         }
         if (startSample !== endSample) {
           ctx.fillStyle = 'rgba(255,0,0,0.2)';
@@ -177,7 +200,7 @@
         const byteSize = Math.ceil((endSample - startSample) / 4) * 4;
         const timeStart = (startSample / 44100).toFixed(2);
         const timeEnd = (endSample / 44100).toFixed(2);
-        info.textContent = `Selection: ${durationMs} ms • ${byteSize} bytes (µ-law) • Start: ${timeStart}s • End: ${timeEnd}s`;
+        info.textContent = `Selection: ${durationMs} ms • ${byteSize} bytes (µ-law) • Start: ${timeStart}s • End: ${timeEnd}s • Fade: ${fadeLength} ms`;
       }
 
       previewBtn.onclick = () => {
@@ -185,9 +208,16 @@
         const length = endSample - startSample;
         const clip = clipType.value;
         const clipped = new Float32Array(length);
+        const fadeLength = parseFloat(fadeInput?.value || 0);
+        const fadeSamples = Math.floor((fadeLength / 1000) * 44100);
         for (let i = 0; i < length; i++) {
           const raw = monoData[startSample + i] * gain;
-          clipped[i] = (clip === 'hard') ? Math.max(-1, Math.min(1, raw)) : Math.tanh(raw);
+          let value = (clip === 'hard') ? Math.max(-1, Math.min(1, raw)) : Math.tanh(raw);
+          if (fadeSamples > 0 && i > length - fadeSamples) {
+            const fadeFactor = (length - i) / fadeSamples;
+            value *= fadeFactor;
+          }
+          clipped[i] = value;
         }
         const buf = previewCtx.createBuffer(1, length, 44100);
         buf.copyToChannel(clipped, 0);
@@ -202,9 +232,16 @@
         const length = endSample - startSample;
         const clip = clipType.value;
         const trimmed = new Float32Array(length);
+        const fadeLength = parseFloat(fadeInput?.value || 0);
+        const fadeSamples = Math.floor((fadeLength / 1000) * 44100);
         for (let i = 0; i < length; i++) {
           const raw = monoData[startSample + i] * gain;
-          trimmed[i] = (clip === 'hard') ? Math.max(-1, Math.min(1, raw)) : Math.tanh(raw);
+          let value = (clip === 'hard') ? Math.max(-1, Math.min(1, raw)) : Math.tanh(raw);
+          if (fadeSamples > 0 && i > length - fadeSamples) {
+            const fadeFactor = (length - i) / fadeSamples;
+            value *= fadeFactor;
+          }
+          trimmed[i] = value;
         }
 
         const ulaw = new Uint8Array(length);
