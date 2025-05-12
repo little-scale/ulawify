@@ -241,7 +241,7 @@ PROGMEM
     for (let i = 0; i < packed.length; i++) {
       if (i % 8 === 0) cpp += '  ';
       cpp += `0x${packed[i].toString(16).padStart(8, '0')}, `;
-      if ((i + 1) % 8 === 0) cpp += '
+      if ((i + 1) % 8 === 0) cpp += '\\n';
 ';
     }
     cpp += '};
