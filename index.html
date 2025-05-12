@@ -43,8 +43,27 @@
   </select><br><br>
   <canvas id="waveform" width="800" height="120"></canvas>
   <div id="info"></div><br>
+<button onclick="previewAudio()">▶ Preview Selection</button><br><br>
   <button onclick="downloadZip()">📂 Export .cpp/.h ZIP</button>
-  <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js">function previewAudio() {
+  const gain = parseFloat(gainSlider.value);
+  const clip = clipType.value;
+  const length = endSample - startSample;
+  const trimmed = new Float32Array(length);
+  for (let i = 0; i < length; i++) {
+    const raw = monoData[startSample + i] * gain;
+    trimmed[i] = clip === 'hard' ? Math.max(-1, Math.min(1, raw)) : Math.tanh(raw);
+  }
+  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  const buffer = ctx.createBuffer(1, length, 22050);
+  buffer.copyToChannel(trimmed, 0);
+  const src = ctx.createBufferSource();
+  src.buffer = buffer;
+  src.connect(ctx.destination);
+  src.start();
+}
+
+</script>
   <script>
     let audioBuffer, monoData, startSample = 0, endSample = 0;
     const canvas = document.getElementById('waveform');
@@ -145,7 +164,7 @@
       }
       const arrayName = `AudioSample${fileName}`;
       const header = `// Audio data converted from WAV file by ulawify\n\nextern const unsigned int ${arrayName}[${packed.length}];\n`;
-      let cpp = `// Audio data converted from WAV file by ulawify\n\n#include \"${fileName}.h\"\n#include <Arduino.h>\n// Converted from ${fileName}.wav, using 22050 Hz, u-law encoding\nPROGMEM\nconst unsigned int ${arrayName}[${packed.length}] = {\n`;
+      let cpp = `// Audio data converted from WAV file by ulawify #include \"AudioSample\${fileName}.h\"\n#include <Arduino.h>\n// Converted from ${fileName}.wav, using 22050 Hz, u-law encoding\nPROGMEM\nconst unsigned int ${arrayName}[${packed.length}] = {\n`;
       for (let i = 0; i < packed.length; i++) {
         if (i % 8 === 0) cpp += '  ';
         cpp += `0x${packed[i].toString(16).padStart(8, '0')}, `;
@@ -153,8 +172,8 @@
       }
       cpp += '};\n';
       const zip = new JSZip();
-      zip.file(`${fileName}.h`, header);
-      zip.file(`${fileName}.cpp`, cpp);
+      zip.file(`AudioSample${fileName}.h`, header);
+      zip.file(`AudioSample${fileName}.cpp`, cpp);
       const blob = await zip.generateAsync({ type: 'blob' });
       const a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
