@@ -176,15 +176,18 @@
           ctx.fillRect(x, y, 1, 1);
 
           // Draw fade overlay if active
-          if (fadeLength > 0) {
-            const totalSamples = endSample - startSample;
+          if (fadeLength > 0 && endSample > startSample) {
             const fadeSamples = Math.floor((fadeLength / 1000) * 44100);
-            const fadeStartX = width * (1 - (fadeSamples / totalSamples));
-            if (x >= fadeStartX && x <= width) {
-              const alpha = (x - fadeStartX) / (width - fadeStartX);
-              ctx.fillStyle = `rgba(0,0,255,${0.2 + alpha * 0.2})`;
+            const fadeStartSample = endSample - fadeSamples;
+            const sampleIndex = Math.floor(startSample + (x / width) * (endSample - startSample));
+            if (sampleIndex >= fadeStartSample && sampleIndex <= endSample) {
+              const fadeProgress = (sampleIndex - fadeStartSample) / (endSample - fadeStartSample);
+              const fadeAlpha = 0.1 + fadeProgress * 0.3;
+              ctx.fillStyle = `rgba(0,0,255,${fadeAlpha.toFixed(2)})`;
               ctx.fillRect(x, 0, 1, height);
               ctx.fillStyle = '#888';
+            }
+          }
             }
           }
         }
