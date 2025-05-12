@@ -25,255 +25,185 @@
       display: inline-block;
       width: 100px;
     }
-    .sample-block {
-      margin-bottom: 40px;
-      border-bottom: 1px dashed #ccc;
-      padding-bottom: 20px;
-    }
-    #info {
-      margin-top: 10px;
-      font-size: 0.9em;
-      color: #444;
-    }
   </style>
 </head>
 <body>
   <h1>ulawify</h1>
-  <p>Convert WAV files to Teensy-compatible µ-law encoded <code>.h</code> and <code>.cpp</code></p>
-  <div id="samples"></div>
-  <button onclick="addSampleBlock()">➕ Add File</button>
+  <p>Convert a WAV file to Teensy-compatible µ-law encoded <code>.h</code> and <code>.cpp</code></p>
+  <input type="file" accept=".wav" id="fileInput"><br>
+
+  <div class="controls">
+    <label for="gain">Gain:</label>
+    <input type="range" min="1" max="5" value="1" step="0.1" id="gain">
+    <span id="gainVal">1.0</span><br><br>
+
+    <canvas id="waveform" width="700" height="100"></canvas><br>
+    <button onclick="previewAudio()">▶ Preview Trimmed Audio</button>
+    <button onclick="processFile()">💾 Convert & Download</button>
+    <p id="status"></p>
+  </div>
 
   <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
   <script>
-    let sampleCounter = 0;
+    let audioBuffer, monoData = [], sampleRate = 44100;
+    let startSample = 0, endSample = 0;
+    let fileName = "sample";
+    const gainSlider = document.getElementById('gain');
+    const gainVal = document.getElementById('gainVal');
+    const canvas = document.getElementById('waveform');
+    const ctx = canvas.getContext('2d');
+    const status = document.getElementById('status');
+    const previewCtx = new (window.AudioContext || window.webkitAudioContext)();
 
-    function addSampleBlock() {
-      const container = document.createElement('div');
-      container.className = 'sample-block';
-      container.innerHTML = `
-        <h3>Sample</h3>
-        <label>Output name:</label>
-        <input type="text" class="outputName" value="sample${sampleCounter}"><br><br>
+    gainSlider.oninput = () => gainVal.textContent = gainSlider.value;
 
-        <label>Upload WAV:</label>
-        <input type="file" class="fileInput" accept=".wav"><br><br>
+    document.getElementById('fileInput').addEventListener('change', async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      fileName = file.name.replace(/\.[^/.]+$/, '').replace(/[^a-zA-Z0-9]/g, '');
+      const arrayBuffer = await file.arrayBuffer();
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      let decoded = await ctx.decodeAudioData(arrayBuffer);
 
-        <label>Gain:</label>
-        <input type="range" min="1" max="5" value="1" step="0.1" class="gain">
-        <span class="gainVal">1.0</span><br><br>
-
-        <label>Clipping:</label>
-        <select class="clipType">
-          <option value="soft">Soft (tanh)</option>
-          <option value="hard">Hard (clip)</option>
-        </select><br><br>
-
-        <canvas class="waveform" width="700" height="100"></canvas>
-        <div class="info"></div><br>
-
-        <button class="preview">▶ Preview</button>
-        <button class="download">📂 Download</button>
-      `;
-      document.getElementById('samples').appendChild(container);
-      setupSampleBlock(container, sampleCounter++);
-    }
-
-    function setupSampleBlock(block, index) {
-  const fileInput = block.querySelector('.fileInput');
-  const gainSlider = block.querySelector('.gain');
-  const gainVal = block.querySelector('.gainVal');
-  const clipType = block.querySelector('.clipType');
-  const canvas = block.querySelector('.waveform');
-  const ctx = canvas.getContext('2d');
-  const info = block.querySelector('.info');
-  const outputName = block.querySelector('.outputName');
-  const previewBtn = block.querySelector('.preview');
-  const downloadBtn = block.querySelector('.download');
-
-  let audioBuffer, monoData = [], startSample = 0, endSample = 0;
-  let selecting = false, selectStartX = 0, selectEndX = 0;
-  const previewCtx = new (window.AudioContext || window.webkitAudioContext)();
-
-  gainSlider.oninput = () => {
-    gainVal.textContent = gainSlider.value;
-    drawWaveform();
-  };
-
-  fileInput.addEventListener('change', async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    outputName.value = file.name.replace(/\.[^/.]+$/, '').replace(/[^a-zA-Z0-9]/g, '');
-    const arrayBuffer = await file.arrayBuffer();
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
-    let decoded = await ctx.decodeAudioData(arrayBuffer);
-
-    if (decoded.sampleRate !== 44100) {
-      const length = Math.floor(decoded.duration * 44100);
-      const offline = new OfflineAudioContext(1, length, 44100);
-      const src = offline.createBufferSource();
-      src.buffer = decoded;
-      src.connect(offline.destination);
-      src.start();
-      decoded = await offline.startRendering();
-    }
-
-    audioBuffer = decoded;
-    const L = decoded.getChannelData(0);
-    const R = decoded.numberOfChannels > 1 ? decoded.getChannelData(1) : L;
-    const len = decoded.length;
-    monoData = new Float32Array(len);
-    for (let i = 0; i < len; i++) monoData[i] = (L[i] + R[i]) * 0.5;
-
-    startSample = 0;
-    endSample = len;
-    drawWaveform();
-  });
-
-  canvas.addEventListener('mousedown', (e) => {
-    selecting = true;
-    selectStartX = e.offsetX;
-    selectEndX = e.offsetX;
-  });
-  canvas.addEventListener('mousemove', (e) => {
-    if (selecting) {
-      selectEndX = e.offsetX;
-      updateSelection();
-    }
-  });
-  canvas.addEventListener('mouseup', () => selecting = false);
-
-  function updateSelection() {
-    const width = canvas.width;
-    const startX = Math.min(selectStartX, selectEndX);
-    const endX = Math.max(selectStartX, selectEndX);
-    startSample = Math.floor((startX / width) * monoData.length);
-    endSample = Math.floor((endX / width) * monoData.length);
-    drawWaveform();
-  }
-
-  function drawWaveform() {
-    const width = canvas.width;
-    const height = canvas.height;
-    ctx.clearRect(0, 0, width, height);
-    ctx.fillStyle = '#888';
-    const gain = parseFloat(gainSlider.value);
-    const clip = clipType.value;
-    const step = Math.floor(monoData.length / width);
-    for (let x = 0; x < width; x++) {
-      const i = x * step;
-      const raw = (monoData[i] || 0) * gain;
-      const v = clip === 'hard' ? Math.max(-1, Math.min(1, raw)) : Math.tanh(raw);
-      const y = (1 - v) * height / 2;
-      ctx.fillRect(x, y, 1, 1);
-    }
-    if (startSample !== endSample) {
-      ctx.fillStyle = 'rgba(255,0,0,0.2)';
-      const sx = (startSample / monoData.length) * width;
-      const ex = (endSample / monoData.length) * width;
-      ctx.fillRect(Math.min(sx, ex), 0, Math.abs(ex - sx), height);
-    }
-
-    const durationMs = ((endSample - startSample) / 44100 * 1000).toFixed(1);
-    const byteSize = Math.ceil((endSample - startSample) / 4) * 4;
-    const timeStart = (startSample / 44100).toFixed(2);
-    const timeEnd = (endSample / 44100).toFixed(2);
-    info.textContent = `Selection: ${durationMs} ms • ${byteSize} bytes (µ-law) • Start: ${timeStart}s • End: ${timeEnd}s`;
-  }
-
-  previewBtn.onclick = () => {
-    const gain = parseFloat(gainSlider.value);
-    const length = endSample - startSample;
-    const clip = clipType.value;
-    const clipped = new Float32Array(length);
-    for (let i = 0; i < length; i++) {
-      const raw = monoData[startSample + i] * gain;
-      clipped[i] = (clip === 'hard') ? Math.max(-1, Math.min(1, raw)) : Math.tanh(raw);
-    }
-    const buf = previewCtx.createBuffer(1, length, 44100);
-    buf.copyToChannel(clipped, 0);
-    const src = previewCtx.createBufferSource();
-    src.buffer = buf;
-    src.connect(previewCtx.destination);
-    src.start();
-  };
-
-  downloadBtn.onclick = async () => {
-    const gain = parseFloat(gainSlider.value);
-    const length = endSample - startSample;
-    const clip = clipType.value;
-    const trimmed = new Float32Array(length);
-    for (let i = 0; i < length; i++) {
-      const raw = monoData[startSample + i] * gain;
-      trimmed[i] = (clip === 'hard') ? Math.max(-1, Math.min(1, raw)) : Math.tanh(raw);
-    }
-
-    const ulaw = new Uint8Array(length);
-    for (let i = 0; i < length; i++) {
-      const pcm = Math.floor(trimmed[i] * 32767);
-      ulaw[i] = linearToUlaw(pcm);
-    }
-
-    const packed = [];
-    for (let i = 0; i < ulaw.length; i += 4) {
-      let val = 0;
-      for (let j = 0; j < 4; j++) {
-        val |= (ulaw[i + j] || 0) << (8 * (3 - j));
+      // Resample if needed
+      if (decoded.sampleRate !== 44100) {
+        const length = Math.floor(decoded.duration * 44100);
+        const offline = new OfflineAudioContext(1, length, 44100);
+        const src = offline.createBufferSource();
+        src.buffer = decoded;
+        src.connect(offline.destination);
+        src.start();
+        decoded = await offline.startRendering();
       }
-      packed.push(val >>> 0);
+
+      audioBuffer = decoded;
+      const L = decoded.getChannelData(0);
+      const R = decoded.numberOfChannels > 1 ? decoded.getChannelData(1) : L;
+      const len = decoded.length;
+      monoData = new Float32Array(len);
+      for (let i = 0; i < len; i++) monoData[i] = (L[i] + R[i]) * 0.5;
+
+      startSample = 0;
+      endSample = len;
+      drawWaveform();
+    });
+
+    function drawWaveform() {
+      const width = canvas.width;
+      const height = canvas.height;
+      ctx.clearRect(0, 0, width, height);
+      ctx.fillStyle = '#888';
+      const step = Math.floor(monoData.length / width);
+      for (let x = 0; x < width; x++) {
+        const i = x * step;
+        const v = monoData[i] || 0;
+        const y = (1 - v) * height / 2;
+        ctx.fillRect(x, y, 1, 1);
+      }
+      // Draw start/end handles
+      ctx.fillStyle = 'rgba(255,0,0,0.6)';
+      ctx.fillRect((startSample / monoData.length) * width, 0, 2, height);
+      ctx.fillRect((endSample / monoData.length) * width, 0, 2, height);
     }
 
-    const name = outputName.value;
-    const header = `// Audio data converted from WAV file by ulawify
-` +
-      `extern const unsigned int AudioSample${name}[${packed.length}];
-`;
+    let isDragging = null;
+    canvas.addEventListener('mousedown', (e) => {
+      const x = e.offsetX;
+      const width = canvas.width;
+      const startX = (startSample / monoData.length) * width;
+      const endX = (endSample / monoData.length) * width;
+      if (Math.abs(x - startX) < 10) isDragging = 'start';
+      else if (Math.abs(x - endX) < 10) isDragging = 'end';
+    });
+    canvas.addEventListener('mousemove', (e) => {
+      if (!isDragging) return;
+      const x = e.offsetX;
+      const sample = Math.floor((x / canvas.width) * monoData.length);
+      if (isDragging === 'start') {
+        startSample = Math.min(sample, endSample - 100);
+      } else {
+        endSample = Math.max(sample, startSample + 100);
+      }
+      drawWaveform();
+    });
+    canvas.addEventListener('mouseup', () => isDragging = null);
 
-    let cpp = `// Audio data converted from WAV file by ulawify
-`;
-    cpp += `#include \"${name}.h\"
-#include <Arduino.h>
-`;
-    cpp += `// Converted from input.wav, using 44100 Hz, u-law encoding
-PROGMEM
-`;
-    cpp += `const unsigned int AudioSample${name}[${packed.length}] = {
-`;
-    for (let i = 0; i < packed.length; i++) {
-      if (i % 8 === 0) cpp += '  ';
-      cpp += `0x${packed[i].toString(16).padStart(8, '0')}, `;
-      if ((i + 1) % 8 === 0) cpp += '
-';
+    function linearToUlaw(sample) {
+      const BIAS = 0x84;
+      const CLIP = 32635;
+      let sign = (sample >> 8) & 0x80;
+      if (sign) sample = -sample;
+      if (sample > CLIP) sample = CLIP;
+      sample += BIAS;
+      let exponent = 7;
+      for (let expMask = 0x4000; (sample & expMask) === 0 && exponent > 0; expMask >>= 1)
+        exponent--;
+      let mantissa = (sample >> (exponent + 3)) & 0x0F;
+      return ~(sign | (exponent << 4) | mantissa) & 0xFF;
     }
-    cpp += '};
-';
 
-    const zip = new JSZip();
-    zip.file(`${name}.h`, header);
-    zip.file(`${name}.cpp`, cpp);
-    const blob = await zip.generateAsync({ type: 'blob' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = `${name}_ulaw.zip`;
-    a.click();
-  };
+    function previewAudio() {
+      const gain = parseFloat(gainSlider.value);
+      const length = endSample - startSample;
+      const clipped = new Float32Array(length);
+      for (let i = 0; i < length; i++) {
+        clipped[i] = Math.tanh(monoData[startSample + i] * gain);
+      }
+      const buf = previewCtx.createBuffer(1, length, 44100);
+      buf.copyToChannel(clipped, 0);
+      const src = previewCtx.createBufferSource();
+      src.buffer = buf;
+      src.connect(previewCtx.destination);
+      src.start();
+    }
 
-  function linearToUlaw(sample) {
-    const BIAS = 0x84;
-    const CLIP = 32635;
-    let sign = (sample >> 8) & 0x80;
-    if (sign) sample = -sample;
-    if (sample > CLIP) sample = CLIP;
-    sample += BIAS;
-    let exponent = 7;
-    for (let expMask = 0x4000; (sample & expMask) === 0 && exponent > 0; expMask >>= 1)
-      exponent--;
-    let mantissa = (sample >> (exponent + 3)) & 0x0F;
-    return ~(sign | (exponent << 4) | mantissa) & 0xFF;
-  }
-}
+    async function processFile() {
+      const gain = parseFloat(gainSlider.value);
+      const length = endSample - startSample;
+      const trimmed = new Float32Array(length);
+      for (let i = 0; i < length; i++) {
+        trimmed[i] = Math.tanh(monoData[startSample + i] * gain);
+      }
 
-// Add initial block on page load
-addSampleBlock();
+      const ulaw = new Uint8Array(length);
+      for (let i = 0; i < length; i++) {
+        const pcm = Math.floor(trimmed[i] * 32767);
+        ulaw[i] = linearToUlaw(pcm);
+      }
+
+      const packed = [];
+      for (let i = 0; i < ulaw.length; i += 4) {
+        let val = 0;
+        for (let j = 0; j < 4; j++) {
+          val |= (ulaw[i + j] || 0) << (8 * (3 - j));
+        }
+        packed.push(val >>> 0);
+      }
+
+      const header = `// Audio data converted from WAV file by ulawify\n` +
+        `extern const unsigned int ${fileName}[${packed.length}];\n`;
+
+      let cpp = `// Audio data converted from WAV file by ulawify\n`;
+      cpp += `#include "${fileName}.h"\n#include <Arduino.h>\n`;
+      cpp += `// Converted from input.wav, using 44100 Hz, u-law encoding\nPROGMEM\n`;
+      cpp += `const unsigned int ${fileName}[${packed.length}] = {\n`;
+      for (let i = 0; i < packed.length; i++) {
+        if (i % 8 === 0) cpp += '  ';
+        cpp += `0x${packed[i].toString(16).padStart(8, '0')}, `;
+        if ((i + 1) % 8 === 0) cpp += '\n';
+      }
+      cpp += '};\n';
+
+      const zip = new JSZip();
+      zip.file(`${fileName}.h`, header);
+      zip.file(`${fileName}.cpp`, cpp);
+      const blob = await zip.generateAsync({ type: 'blob' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `${fileName}_ulaw.zip`;
+      a.click();
+      status.textContent = 'Done!';
+    }
   </script>
 </body>
 </html>
