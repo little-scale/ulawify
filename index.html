@@ -164,8 +164,17 @@
       }
       const arrayName = `AudioSample${fileName}`;
       const header = `// Audio data converted from WAV file by ulawify\n\nextern const unsigned int ${arrayName}[${packed.length}];\n`;
-      let cpp = `// Audio data converted from WAV file by ulawify #include \"AudioSample\${fileName}.h\"\n#include <Arduino.h>\n// Converted from ${fileName}.wav, using 22050 Hz, u-law encoding\nPROGMEM\nconst unsigned int ${arrayName}[${packed.length}] = {\n`;
-      for (let i = 0; i < packed.length; i++) {
+      let cpp = `// Audio data converted from WAV file by ulawify
+` +
+                  `// Converted from ${fileName}.wav, using 22050 Hz, u-law encoding
+` +
+                  `#include \"AudioSample${fileName}.h\"
+#include <Arduino.h>
+` +
+                  `PROGMEM
+` +
+                  `const unsigned int AudioSample${fileName}[${packed.length}] = {
+`;      for (let i = 0; i < packed.length; i++) {
         if (i % 8 === 0) cpp += '  ';
         cpp += `0x${packed[i].toString(16).padStart(8, '0')}, `;
         if ((i + 1) % 8 === 0) cpp += '\n';
